@@ -222,6 +222,16 @@ ptr<iface> iface::open_ifd(const std::string& name)
         << "fd=" << fd << ", hwaddr="
         << ether_ntoa((const struct ether_addr* )&ifr.ifr_hwaddr.sa_data);
 
+    // Set freebind mode
+
+    int freebind = 1;
+
+    if (setsockopt(fd, SOL_IPV6, IPV6_FREEBIND, &freebind, sizeof(freebind))) {
+        close(fd);
+        logger::error() << "iface::open_ifd() failed IPV6_FREEBIND";
+        return ptr<iface>();
+    }
+
     // Set max hops.
 
     int hops = 255;
@@ -315,11 +325,14 @@ ssize_t iface::read(int fd, struct sockaddr* saddr, uint8_t* msg, size_t size)
     return len;
 }
 
-ssize_t iface::write(int fd, const address& daddr, const uint8_t* msg, size_t size)
+ssize_t iface::write(int fd, const address& daddr, const address *taddr, const uint8_t* msg, size_t size)
 {
     struct sockaddr_in6 daddr_tmp;
     struct msghdr mhdr;
     struct iovec iov;
+    struct in6_pktinfo *src_info;
+    struct cmsghdr *cmsg;
+    uint8_t buf[CMSG_SPACE(sizeof(struct in6_pktinfo))];
 
     memset(&daddr_tmp, 0, sizeof(struct sockaddr_in6));
     daddr_tmp.sin6_family = AF_INET6;
@@ -335,13 +348,27 @@ ssize_t iface::write(int fd, const address& daddr, const uint8_t* msg, size_t si
     mhdr.msg_iov =& iov;
     mhdr.msg_iovlen = 1;
 
+    if (taddr) {
+        memset(buf, 0, sizeof(buf));
+        mhdr.msg_control = buf;
+        mhdr.msg_controllen = CMSG_LEN(sizeof(struct in6_pktinfo));
+
+        cmsg = CMSG_FIRSTHDR(&mhdr);
+        cmsg->cmsg_level = SOL_IPV6;
+        cmsg->cmsg_type = IPV6_PKTINFO;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(struct in6_pktinfo));
+        src_info = (in6_pktinfo *)CMSG_DATA(cmsg);
+        memcpy(&src_info->ipi6_addr, &taddr->const_addr(), sizeof(struct in6_addr));
+    }
     logger::debug() << "iface::write() daddr=" << daddr.to_string() << ", len="
                     << size;
 
     int len;
 
-    if ((len = sendmsg(fd,& mhdr, 0)) < 0)
+    if ((len = sendmsg(fd,& mhdr, 0)) < 0) {
+        logger::error() << "iface::write() daddr=" << daddr.to_string() << ": errno=" << errno;
         return -1;
+    }
 
     return len;
 }
@@ -407,7 +434,7 @@ ssize_t iface::write_solicit(const address& taddr)
     logger::debug() << "iface::write_solicit() taddr=" << taddr.to_string()
                     << ", daddr=" << daddr.to_string();
 
-    return write(_ifd, daddr, (uint8_t* )buf, sizeof(struct nd_neighbor_solicit)
+    return write(_ifd, daddr, 0, (uint8_t* )buf, sizeof(struct nd_neighbor_solicit)
                  + sizeof(struct nd_opt_hdr) + 6);
 }
 
@@ -437,7 +464,7 @@ ssize_t iface::write_advert(const address& daddr, const address& taddr, bool rou
     logger::debug() << "iface::write_advert() daddr=" << daddr.to_string()
                     << ", taddr=" << taddr.to_string();
 
-    return write(_ifd, daddr, (uint8_t* )buf, sizeof(struct nd_neighbor_advert) +
+    return write(_ifd, daddr, &taddr, (uint8_t* )buf, sizeof(struct nd_neighbor_advert) +
         sizeof(struct nd_opt_hdr) + 6);
 }
 

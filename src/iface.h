@@ -44,7 +44,7 @@ public:
 
     static ssize_t read(int fd, struct sockaddr* saddr, uint8_t* msg, size_t size);
 
-    static ssize_t write(int fd, const address& daddr, const uint8_t* msg, size_t size);
+    static ssize_t write(int fd, const address& daddr, const address *taddr, const uint8_t* msg, size_t size);
 
     // Writes a NB_NEIGHBOR_SOLICIT message to the _ifd socket.
     ssize_t write_solicit(const address& taddr);
